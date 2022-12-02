@@ -1,0 +1,253 @@
+module SierpinskiTetrahedron exposing (..)
+
+import Browser
+import Time
+import Angle
+import Camera3d
+import Color
+import Direction3d
+import Html exposing (Html)
+import Html.Attributes as Attrs
+import Html.Events as Evts
+import Length
+import Pixels
+import Point3d
+import Vector3d
+import Quantity
+import Cylinder3d
+import Triangle3d
+import Sphere3d
+import Scene3d
+import Axis3d
+import Scene3d.Material as Material
+import Viewpoint3d
+import Dict exposing (Dict)
+import Html.Events.Extra.Pointer as Pointer
+import Html.Events.Extra.Mouse as Mouse
+import Random
+
+
+main = Browser.element { init = init
+                       , update = update
+                       , view = view
+                       , subscriptions = subscriptions
+                       }
+
+type alias Model = { level : Int
+                   , vertices : List (Point3d.Point3d Length.Meters WorldCoordinates)
+                   --, edges : List Edge
+                   --, faces : List Face
+                   --, faceAdjList : List (List Int)
+                   --, on :List (Bool)
+                   , theta : Float
+                   , start : Maybe {x:Float, y:Float}
+                   }
+type alias Vertex = {x:Float, y:Float, z:Float}
+type alias Edge = {from: Int, to:Int}
+type alias Face = List Int
+
+type Msg =  Refine
+         | RStart {x: Float, y: Float}
+         | RMove {x: Float, y: Float}
+         | REnd {x: Float, y: Float}
+
+type WorldCoordinates = WorldCoordinates
+
+init : () -> (Model, Cmd Msg)
+init _ = ( Model 1
+               (points 1 1 (Point3d.origin))
+               0
+               Nothing
+         , Cmd.none)
+
+update : Msg -> Model -> (Model, Cmd Msg)
+update  msg model =
+    case msg of
+        Refine ->
+            let
+                newLevel = if model.level < 6 then
+                                   model.level + 1
+                               else
+                                   model.level
+            in
+            ( {model | level = newLevel,
+                   vertices = points 1 newLevel Point3d.origin
+              }
+              , Cmd.none
+              )
+        RStart pos ->
+            let
+                dummy = Debug.log "RStart" pos
+            in
+            ({model | start = Just pos}, Cmd.none)
+        RMove pos ->
+            let
+                dir = Debug.log "" <| case model.start of
+                                          Just from -> { x = -pos.y + from.y
+                                                       , y = pos.x - from.x
+                                                       }
+                                          Nothing -> {x=1,y=0}
+                axis = Maybe.withDefault Axis3d.x <|
+                       Axis3d.throughPoints
+                           Point3d.origin
+                           (Point3d.meters  dir.x 0 dir.y )
+                angle = Angle.degrees  (0.5*(sqrt (dir.x^2 + dir.y^2)))
+                vertices = List.map (\v -> Point3d.rotateAround
+                                           axis angle v
+                                    ) model.vertices
+            in
+            ({model | start = case model.start of
+                                  Just drom -> Just pos
+                                  Nothing -> Nothing
+             ,vertices = case model.start of
+                             Just from ->  vertices
+                             Nothing -> model.vertices
+             }
+            , Cmd.none)
+        REnd pos ->
+            let
+                dummy = Debug.log "REnd" pos
+                newModel = case model.start of
+                               Just start ->
+                                   {model | start = Nothing}
+                               Nothing ->
+                                   model
+            in
+                (newModel, Cmd.none)
+
+
+
+points : Int -> Int -> Point3d.Point3d Length.Meters WorldCoordinates  -> List (Point3d.Point3d Length.Meters WorldCoordinates)
+points level depth currentPos  =
+    if level == depth then
+        [currentPos]
+    else
+        let
+            vectors = [ Vector3d.scaleBy (0.5^(toFloat level)) (Vector3d.meters 0 0 1 )
+                      , Vector3d.scaleBy (0.5^(toFloat level)) (Vector3d.meters (sqrt (8.0/9.0)) 0 (-1.0/3.0) )
+                      , Vector3d.scaleBy (0.5^(toFloat level)) (Vector3d.meters -(sqrt (2.0/9.0)) (sqrt (2.0/3.0)) (-1.0/3.0) )
+                      , Vector3d.scaleBy (0.5^(toFloat level)) (Vector3d.meters -(sqrt (2.0/9.0)) -(sqrt (2.0/3.0)) (-1.0/3.0) )
+                      ]
+            nextPositions = List.map (\v -> Point3d.translateBy v currentPos) vectors
+        in
+            List.concat <| List.map (\p -> points (level+1) depth p) nextPositions
+
+tetrahedra : Int -> Int -> Point3d.Point3d Length.Meters WorldCoordinates  -> List (Point3d.Point3d Length.Meters WorldCoordinates)
+tetrahedra level depth currentPos  =
+    if level == depth then
+        [currentPos]
+    else
+        let
+            vectors = [ Vector3d.scaleBy (0.5^(toFloat level)) (Vector3d.meters 0 0 1 )
+                      , Vector3d.scaleBy (0.5^(toFloat level)) (Vector3d.meters (sqrt (8.0/9.0)) 0 (-1.0/3.0) )
+                      , Vector3d.scaleBy (0.5^(toFloat level)) (Vector3d.meters -(sqrt (2.0/9.0)) (sqrt (2.0/3.0)) (-1.0/3.0) )
+                      , Vector3d.scaleBy (0.5^(toFloat level)) (Vector3d.meters -(sqrt (2.0/9.0)) -(sqrt (2.0/3.0)) (-1.0/3.0) )
+                      ]
+            nextPositions = List.map (\v -> Point3d.translateBy v currentPos) vectors
+        in
+            List.concat <| List.map (\p -> tetrahedra (level+1) depth p) nextPositions
+                
+
+rotation : Point3d.Point3d Length.Meters WorldCoordinates -> Point3d.Point3d Length.Meters WorldCoordinates
+rotation v =
+    Point3d.rotateAround Axis3d.z (Angle.degrees 1) v
+
+
+relativePosition ev =
+    {x= Tuple.first ev.pointer.offsetPos
+    ,y= Tuple.second ev.pointer.offsetPos
+    }
+    
+view : Model -> Html Msg
+view model =
+    let
+        material =
+            Material.nonmetal
+                { baseColor = Color.lightYellow
+                , roughness = 0.4 -- varies from 0 (mirror-like) to 1 (matte)
+                }
+        onMaterial =
+            Material.nonmetal
+                { baseColor = Color.lightYellow
+                , roughness = 0.4 -- varies from 0 (mirror-like) to 1 (matte)
+                }
+        offMaterial =
+            Material.nonmetal
+                { baseColor = Color.darkGray
+                , roughness = 0.4 -- varies from 0 (mirror-like) to 1 (matte)
+                }
+        redMaterial =
+            Material.nonmetal
+                { baseColor = Color.red
+                , roughness = 0.4 -- varies from 0 (mirror-like) to 1 (matte)
+                }
+        blackMaterial =
+            Material.nonmetal
+                { baseColor = Color.black
+                , roughness = 0.4 -- varies from 0 (mirror-like) to 1 (matte)
+                }
+        whiteMaterial =
+            Material.nonmetal
+                { baseColor = Color.white
+                , roughness = 0.4 -- varies from 0 (mirror-like) to 1 (matte)
+                }
+
+        verticesView = model.vertices
+
+        spheres = List.map (\p -> Scene3d.sphereWithShadow
+                                material (Sphere3d.atPoint p (Length.meters (0.5^(toFloat model.level))))) <|
+                  model.vertices
+                       
+        point p =
+            Point3d.meters p.x p.y p.z
+
+        dist p q =
+            sqrt ((p.x - q.x)^2 + (p.y - q.y)^2 + (p.z - q.z)^2 )
+
+        plane =
+            Scene3d.quad whiteMaterial
+              (Point3d.meters 100 100 -2)
+              (Point3d.meters -100 100 -2)
+              (Point3d.meters -100 -100 -2)
+              (Point3d.meters 100 -100 -2)
+
+        
+        camera =
+            Camera3d.perspective
+                { viewpoint =
+                    Viewpoint3d.lookAt
+                        { focalPoint = Point3d.meters 0 0 0
+                        , eyePoint = Point3d.meters 0 15 10
+                        , upDirection = Direction3d.positiveZ
+                        }
+                , verticalFieldOfView = Angle.degrees 15
+                }
+    in
+    Html.div[Pointer.onDown (\ev-> RStart (relativePosition ev))
+            ,Pointer.onUp (\ev-> REnd (relativePosition ev))
+            ,Pointer.onMove (\ev-> RMove (relativePosition ev))
+            ,Attrs.style "touch-action" "none"
+            ]
+        [ Html.div [Attrs.style "touch-action" "none"]
+              [
+               Html.button [Evts.onClick Refine
+                           ,Attrs.style "font-size" "40px"][
+                    Html.text "refine"
+                    ]
+              ]
+        , Scene3d.sunny
+             { camera = camera
+             , clipDepth = Length.meters 0.05
+             , dimensions = ( Pixels.int 800, Pixels.int 800 )
+             , background = Scene3d.transparentBackground
+             , entities = [plane] ++ spheres
+             , shadows = True
+             , upDirection = Direction3d.z
+             , sunlightDirection = Direction3d.negativeZ 
+             }
+        ]
+
+
+subscriptions : Model -> Sub Msg
+subscriptions  model =
+    Sub.none
